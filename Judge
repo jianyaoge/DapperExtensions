@@ -1,0 +1,139 @@
+/*
+License: This is the latest version of the GNU GPL: a free software license, and a copyleft license.We recommend it for most software packages.
+http://www.gnu.org/licenses/gpl-3.0.html
+Home page: 
+*/
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using RB.ED.DWI.Business.Mapper;
+
+
+namespace RB.ED.DWI.Business
+{
+
+    public interface IJudge
+    {
+        string GetSql(ISql sqlGenerator, IDictionary<string, object> para);
+    }
+
+    public interface IBaseJudge : IJudge
+    {
+        string PropertyName { get; set; }
+    }
+
+    public abstract class BaseJudge : IBaseJudge
+    {
+        public abstract string GetSql(ISql sqlGenerator, IDictionary<string, object> parameters);
+        public string PropertyName { get; set; }
+
+        protected virtual string GetColumnName(Type entityType, ISql sqlGenerator, string propertyName)
+        {
+            _IClassMapper map = sqlGenerator.config.GetMap(entityType);
+            if (map == null)
+            {
+                throw new NullReferenceException(string.Format("Map was not found for {0}", entityType));
+            }
+            IPropertyMapper propertyMap = map.Properties.SingleOrDefault(p => p.Name == propertyName);
+            if (propertyMap == null)
+            {
+                throw new NullReferenceException(string.Format("{0} was not found for {1}", propertyName, entityType));
+            }
+
+            return sqlGenerator.GetColumnName(map, propertyMap, false);
+        }
+    }
+
+    public interface ICompareJudge : IBaseJudge
+    {
+        Operator Operator { get; set; }
+        bool Not { get; set; }
+        string Val { get; set; }
+    }
+
+    public abstract class CompareJudge : BaseJudge
+    {
+        public Operator Operator { get; set; }
+        public bool Not { get; set; }
+        public string Val { get; set; }
+
+        public virtual string GetOperatorString()
+        {
+            switch (Operator)
+            {
+                case Operator.GreaterEqual:
+                    return Not ? "<" : ">=";
+                case Operator.Like:
+                    return Not ? "not like" : "like";
+                case Operator.Less:
+                    return Not ? ">=" : "<";
+                case Operator.LessEqual:
+                    return Not ? ">" : "<=";
+                case Operator.Greater:
+                    return Not ? "<=" : ">";
+                default:
+                    return Not ? "<>" : "=";
+            }
+        }
+    }
+
+    public interface IFieldJudge : ICompareJudge
+    {
+        object Value { get; set; }
+    }
+
+    public class FieldJudge<T> : CompareJudge, IFieldJudge
+        where T : class
+    {
+        public object Value { get; set; }
+
+        public override string GetSql(ISql sqlGenerator, IDictionary<string, object> parameters)
+        {
+            string columnName = GetColumnName(typeof(T), sqlGenerator, PropertyName);
+            if (Value == null)
+            {
+                return string.Format("({0} IS {1}NULL)", columnName, Not ? "NOT " : string.Empty);
+            }
+            if (Value is IEnumerable && !(Value is string))
+            {
+                if (Operator != Operator.Equal)
+                {
+                    throw new ArgumentException("operator  set  eq");
+                }
+                List<string> @params = new List<string>();
+                foreach (var value in (IEnumerable)Value)
+                {
+                    @params.Add(parameters.SetPara(this.PropertyName, value, sqlGenerator.config.Dialect.ParameterPrefix));
+                }
+                return string.Format("({0} {1}IN ({2}))", columnName, Not ? "NOT " : string.Empty, @params.Aggregate(new StringBuilder(), (sb, s) => sb.Append((sb.Length != 0 ? ", " : string.Empty) + s), sb => sb.ToString()));
+            }
+            return string.Format("({0} {1} {2})", columnName, GetOperatorString(), parameters.SetPara(this.PropertyName, this.Value, sqlGenerator.config.Dialect.ParameterPrefix));
+        }
+    }
+
+    public enum Operator
+    {
+        Less,
+        LessEqual,
+        Like,
+        Equal,
+        Greater,
+        GreaterEqual
+    }
+
+    public interface ISort
+    {
+        string Property { get; set; }
+        bool Ascending { get; set; }
+    }
+    public enum GroupOperator { And, Or }
+    public class Sort : ISort
+    {
+        public string Property { get; set; }
+        public bool Ascending { get; set; }
+    }
+
+
+}
