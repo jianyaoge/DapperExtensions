@@ -1,0 +1,224 @@
+/*
+License: This is the latest version of the GNU GPL: a free software license, and a copyleft license.We recommend it for most software packages.
+http://www.gnu.org/licenses/gpl-3.0.html
+Home page: 
+*/
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Dynamic;
+using System.Linq;
+using RB.ED.DWI.Business.Mapper;
+using Dapper;
+
+namespace RB.ED.DWI.Business
+{
+    public interface IDapperImplementor
+    {
+        ISql Sql { get; }
+        T Get<T>(IDbConnection _conn, dynamic id, IDbTransaction _transaction, int? _commandTimeout) where T : class;
+        IEnumerable<T> GetList<T>(IDbConnection _conn, object _judge, IList<ISort> _sort, IDbTransaction _transaction, int? _commandTimeout, bool _buffered) where T : class;
+        void Insert<T>(IDbConnection _conn, IEnumerable<T> _entities, IDbTransaction _transaction, int? _commandTimeout) where T : class;
+        dynamic Insert<T>(IDbConnection _conn, T entity, IDbTransaction _transaction, int? _commandTimeout) where T : class;
+        bool Update<T>(IDbConnection _conn, T _entity, IDbTransaction _transaction, int? _commandTimeout) where T : class;
+    }
+    internal class DapperImplementor : IDapperImplementor
+    {
+        public DapperImplementor(ISql sql)
+        {
+            Sql = sql;
+        }
+        public ISql Sql { get; set; }
+
+        public T Get<T>(IDbConnection _conn, dynamic id, IDbTransaction transaction, int? timeout) where T : class
+        {
+            _IClassMapper _classMap = Sql.config.GetMap<T>();
+            IJudge _judge = GetIdJudge(_classMap, id);
+            T result = GetList<T>(_conn, _classMap, _judge, null, transaction, timeout, true).SingleOrDefault();
+            return result;
+        }
+
+        public void Insert<T>(IDbConnection _conn, IEnumerable<T> entities, IDbTransaction transaction, int? timeout) where T : class
+        {
+            _IClassMapper _classMap = Sql.config.GetMap<T>();
+            var properties = _classMap.Properties.Where(p => p.KeyType != KeyType.NotAKey);
+
+            foreach (var e in entities)
+            {
+                foreach (var column in properties)
+                {
+                    if (column.KeyType == KeyType.Guid)
+                    {
+                        Guid comb = Sql.config.GetGuidID();
+                        column.PropertyInfo.SetValue(e, comb, null);
+                    }
+                }
+            }
+            _conn.Execute(Sql.Insert(_classMap), entities, transaction, timeout, CommandType.Text);
+        }
+
+        public dynamic Insert<T>(IDbConnection _conn, T entity, IDbTransaction transaction, int? timeout) where T : class
+        {
+            _IClassMapper _classMap = Sql.config.GetMap<T>();
+            List<IPropertyMapper> nonIdentityKeyProperties = _classMap.Properties.Where(p => p.KeyType == KeyType.Guid || p.KeyType == KeyType.Assigned).ToList();
+            var identityColumn = _classMap.Properties.SingleOrDefault(p => p.KeyType == KeyType.Identity);
+            foreach (var column in nonIdentityKeyProperties)
+            {
+                if (column.KeyType == KeyType.Guid)
+                {
+                    Guid comb = Sql.config.GetGuidID();
+                    column.PropertyInfo.SetValue(entity, comb, null);
+                }
+            }
+
+            IDictionary<string, object> keyValues = new ExpandoObject();
+            string sql = Sql.Insert(_classMap);
+            if (identityColumn != null)
+            {
+                IEnumerable<long> result;
+
+                if (Sql.SupportsMultipleStatements())
+                {
+                    sql += ";" + Environment.NewLine + Sql.IdentitySql(_classMap);
+                    result = _conn.Query<long>(sql, entity, transaction, false, timeout, CommandType.Text);
+                }
+                else
+                {
+                    _conn.Execute(sql, entity, transaction, timeout, CommandType.Text);
+                    sql = Sql.IdentitySql(_classMap);
+                    result = _conn.Query<long>(sql, entity, transaction, false, timeout, CommandType.Text);
+                }
+
+                long identityValue = result.First();
+                int identity = Convert.ToInt32(identityValue);
+                keyValues.Add(identityColumn.Name, identity);
+                identityColumn.PropertyInfo.SetValue(entity, identity, null);
+            }
+            else
+            {
+                _conn.Execute(sql, entity, transaction, timeout, CommandType.Text);
+            }
+
+            foreach (var column in nonIdentityKeyProperties)
+            {
+                keyValues.Add(column.Name, column.PropertyInfo.GetValue(entity, null));
+            }
+
+            if (keyValues.Count == 1)
+            {
+                return keyValues.First().Value;
+            }
+
+            return keyValues;
+        }
+
+        public bool Update<T>(IDbConnection _conn, T entity, IDbTransaction transaction, int? timeout) where T : class
+        {
+            _IClassMapper _classMap = Sql.config.GetMap<T>();
+            IJudge judge = GetKeyJudge<T>(_classMap, entity);
+            Dictionary<string, object> parameters = new Dictionary<string, object>();
+            string sql = Sql.Update(_classMap, judge, parameters);
+            DynamicParameters dynamicPara = new DynamicParameters();
+
+            var columns = _classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity));
+            foreach (var property in Reflection.GetIDictObjectValues(entity).Where(property => columns.Any(c => c.Name == property.Key)))
+            {
+                dynamicPara.Add(property.Key, property.Value);
+            }
+            foreach (var parameter in parameters)
+            {
+                dynamicPara.Add(parameter.Key, parameter.Value);
+            }
+            return _conn.Execute(sql, dynamicPara, transaction, timeout, CommandType.Text) > 0;
+        }
+
+        public IEnumerable<T> GetList<T>(IDbConnection _conn, object judge, IList<ISort> sort, IDbTransaction transaction, int? timeout, bool buffered) where T : class
+        {
+            _IClassMapper _classMap = Sql.config.GetMap<T>();
+            IJudge wherejudge = GetJudge(judge, _classMap);
+            return GetList<T>(_conn, _classMap, wherejudge, sort, transaction, timeout, true);
+        }
+        protected IEnumerable<T> GetList<T>(IDbConnection _conn, _IClassMapper classMap, IJudge predicate, IList<ISort> sort, IDbTransaction transaction, int? timeout, bool buffered) where T : class
+        {
+            Dictionary<string, object> parameters = new Dictionary<string, object>();
+            string sql = Sql.Select(classMap, predicate, sort, parameters);
+            DynamicParameters dynamicPara = new DynamicParameters();
+            foreach (var parameter in parameters)
+            {
+                dynamicPara.Add(parameter.Key, parameter.Value);
+            }
+            return _conn.Query<T>(sql, dynamicPara, transaction, buffered, timeout, CommandType.Text);
+        }
+        protected IJudge GetJudge(object _judge, _IClassMapper classMap)
+        {
+            IJudge wherejudge = _judge as IJudge;
+            if (wherejudge == null && _judge != null)
+            {
+                wherejudge = GetEntityJudge(classMap, _judge);
+            }
+            return wherejudge;
+        }
+
+        protected IJudge GetIdJudge(_IClassMapper classMap, object id)
+        {
+            var keys = classMap.Properties.Where(p => p.KeyType != KeyType.NotAKey);
+            IDictionary<string, object> paramValues = null;
+            IList<IJudge> _judge = new List<IJudge>();
+            if (!Reflection.IsSimpleType(id.GetType()))
+            {
+                paramValues = Reflection.GetIDictObjectValues(id);
+            }
+            foreach (var key in keys)
+            {
+                object value = id;
+                if (!Reflection.IsSimpleType(id.GetType()))
+                {
+                    value = paramValues[key.Name];
+                }
+                Type predicateType = typeof(FieldJudge<>).MakeGenericType(classMap.EntityType);
+                IFieldJudge fieldjudge = Activator.CreateInstance(predicateType) as IFieldJudge;
+                fieldjudge.Not = false;
+                fieldjudge.PropertyName = key.Name;
+                fieldjudge.Value = value;
+                fieldjudge.Operator = Operator.Equal;
+                _judge.Add(fieldjudge);
+            }
+            return _judge[0];
+        }
+
+        protected IJudge GetKeyJudge<T>(_IClassMapper classMap, T entity) where T : class
+        {
+            var whereFields = classMap.Properties.Where(p => p.KeyType != KeyType.NotAKey);
+            if (!whereFields.Any())
+            {
+                throw new ArgumentException("one key column must be defined!");
+            }
+
+            IList<IJudge> judges = (from field in whereFields  select new FieldJudge<T> {
+                Not = false,
+                Operator = Operator.Equal,
+                PropertyName = field.Name,
+                Value = field.PropertyInfo.GetValue(entity, null)
+            }).Cast<IJudge>().ToList();
+            return judges[0];
+        }
+
+        protected IJudge GetEntityJudge(_IClassMapper _map, object o)
+        {
+            Type judgeType = typeof(FieldJudge<>).MakeGenericType(_map.EntityType);
+            IList<IJudge> _judge = new List<IJudge>();
+            foreach (var kvp in Reflection.GetIDictObjectValues(o))
+            {
+                IFieldJudge fieldjudge = Activator.CreateInstance(judgeType) as IFieldJudge;
+                fieldjudge.Not = false;
+                fieldjudge.PropertyName = kvp.Key;
+                fieldjudge.Value = kvp.Value;
+                fieldjudge.Operator = Operator.Equal;
+                _judge.Add(fieldjudge);
+            }
+            return _judge[0];
+        }
+    }
+
+
+}
