@@ -1,0 +1,109 @@
+/*
+License: This is the latest version of the GNU GPL: a free software license, and a copyleft license.We recommend it for most software packages.
+http://www.gnu.org/licenses/gpl-3.0.html
+Home page: 
+*/
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using RB.ED.DWI.Business.Mapper;
+
+namespace RB.ED.DWI.Business
+{
+    public interface IDapperConfig
+    {
+        void ClearCache();
+        IList<Assembly> Assemblies { get; }
+        IMSSQLDialect Dialect { get; }
+        _IClassMapper GetMap(Type entityType);
+        _IClassMapper GetMap<T>() where T : class;
+        Guid GetGuidID();
+        Type Default { get; }
+    }
+
+    public class DapperConfig : IDapperConfig
+    {
+        private readonly ConcurrentDictionary<Type, _IClassMapper> _classMapsCache = new ConcurrentDictionary<Type, _IClassMapper>();
+        public Type Default { get; set; }
+        public IList<Assembly> Assemblies { get; private set; }
+        public IMSSQLDialect Dialect { get; private set; }
+        public void ClearCache()
+        {
+            _classMapsCache.Clear();
+        }
+        public DapperConfig() : this(typeof(AutoMapper<>), new MSSQLServerDialect(), new List<Assembly>()) {
+        }
+        public DapperConfig(Type defaultMapper,  IMSSQLDialect sqlDialect, IList<Assembly> assemblies)
+        {
+            Default = defaultMapper;
+            Assemblies = assemblies ?? new List<Assembly>();
+            Dialect = sqlDialect;
+        }
+        public _IClassMapper GetMap(Type entityType)
+        {
+            _IClassMapper map;
+            if (!_classMapsCache.TryGetValue(entityType, out map))
+            {
+                Type mapType = GetMapType(entityType);
+                if (mapType == null)
+                {
+                    mapType = Default.MakeGenericType(entityType);
+                }
+                map = Activator.CreateInstance(mapType) as _IClassMapper;
+                _classMapsCache[entityType] = map;
+            }
+            map.Properties.Remove(map.Properties.FirstOrDefault(p => p.Name.ToLower() == "errors"));
+            return map;
+        }
+
+        public _IClassMapper GetMap<T>() where T : class
+        {
+            return GetMap(typeof (T));
+        }
+   
+        public Guid GetGuidID()
+        {
+            byte[] guid = Guid.NewGuid().ToByteArray();
+            DateTime dateTime = new DateTime(1900, 1, 1);
+            DateTime now = DateTime.Now.AddDays(30);
+            TimeSpan timeSpan = new TimeSpan(now.Ticks - dateTime.Ticks);
+            TimeSpan timeOfDay = now.TimeOfDay;
+            byte[] bytes1 = BitConverter.GetBytes(timeSpan.Days+30);
+            byte[] bytes2 = BitConverter.GetBytes((long)(timeOfDay.TotalMilliseconds));
+            Array.Copy(bytes1, bytes1.Length - 2, guid, guid.Length - 6, 2);
+            Array.Copy(bytes2, bytes2.Length - 4, guid, guid.Length - 4, 4);
+            return new Guid(guid);
+        }
+
+        protected virtual Type GetMapType(Type v)
+        {
+            Func<Assembly, Type> getType = a =>
+            {
+                Type[] types = a.GetTypes();
+                return (from type in types
+                        let interfaceType = type.GetInterface(typeof(_IClassMapper<>).FullName)
+                        where
+                            interfaceType != null &&
+                            interfaceType.GetGenericArguments()[0] == v
+                        select type).SingleOrDefault();
+            };
+            Type result = getType(v.Assembly);
+            if (result != null)
+            {
+                return result;
+            }
+            foreach (var mappingAssembly in Assemblies)
+            {
+                result = getType(mappingAssembly);
+                if (result != null)
+                {
+                    return result;
+                }
+            }
+            return getType(v.Assembly);
+        }
+     
+    }
+}
