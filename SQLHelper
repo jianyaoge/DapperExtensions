@@ -1,0 +1,930 @@
+/*
+License: This is the latest version of the GNU GPL: a free software license, and a copyleft license.We recommend it for most software packages.
+http://www.gnu.org/licenses/gpl-3.0.html
+Home page: 
+*/
+using System;
+using System.Data;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Data.SqlClient;
+using System.Data.Common;
+using Dapper;
+
+namespace RB.ED.DWI.Business
+{
+    public class SQLHelper : ISQLHelper
+    {
+        #region 辅助工具类
+        private void PrepareCommand(IDbCommand cmd, IDbConnection conn, IDbTransaction trans, string cmdText, IDataParameter[] cmdParms)
+        {
+            if (conn.State != ConnectionState.Open)
+                conn.Open();
+            cmd.Connection = conn;
+            cmd.CommandText = cmdText;
+            if (trans != null)
+                cmd.Transaction = trans;
+            cmd.CommandType = CommandType.Text;
+            if (conn.ConnectionTimeout > 0)
+            {
+                cmd.CommandTimeout = conn.ConnectionTimeout;
+            }
+
+            if (cmdParms != null)
+            {
+
+                foreach (IDataParameter para in cmdParms)
+                {
+                    if ((para.Direction == ParameterDirection.InputOutput || para.Direction == ParameterDirection.Input) &&
+                        (para.Value == null))
+                    {
+                        para.Value = DBNull.Value;
+                    }
+                    else
+                    {
+                        if (QueryCondition.IsDateTime(para.Value.ToString()))
+                        {
+                            para.DbType = DbType.DateTime;
+                        }
+                    }
+                    cmd.Parameters.Add(para);
+                }
+            }
+        }
+
+        public IDataParameter GetParameter(string paraName, object paraValue)
+        {
+            return new SqlParameter(paraName, paraValue);
+        }
+        public IDataParameter GetParameter(string paraName, object paraValue, System.Data.DbType _dbtype)
+        {
+            IDataParameter para = new SqlParameter(paraName, _dbtype);
+            para.Value = paraValue;
+            return para;
+        }
+        #endregion
+        public SQLHelper()
+        {
+
+        }
+        /// <summary>
+        /// 根据主键ID获取记录
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="primaryId"></param>
+        /// <param name="DBName"></param>
+        /// <returns></returns>
+        public T GetById<T>(dynamic primaryId, string DBName = "") where T : class
+        {
+            IDbConnection conn = BusinessFactory.CreateConnection(DBName);
+            try
+            {
+                return conn.Get<T>(primaryId as object);
+            }
+            catch
+            {
+                throw;
+            }
+            finally
+            {
+                conn.Close();
+                conn.Dispose();
+            }
+        }
+        public T GetByKey<T>(dynamic KeyValue, string DBName = "") where T : class
+        {
+            IDbConnection conn = BusinessFactory.CreateConnection(DBName);
+            try
+            {
+                return conn.GetKey<T>(KeyValue as object);
+            }
+            catch
+            {
+                throw;
+            }
+            finally
+            {
+                conn.Close();
+                conn.Dispose();
+            }
+
+        }
+
+        /// <summary>
+        /// 根据Id获取实体
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="primaryId"></param>
+        /// <returns></returns>
+        public T GetById<T>(IDbConnection conn, dynamic primaryId, IDbTransaction trans) where T : class
+        {
+            return conn.Get<T>(primaryId as object, trans);
+        }
+
+        /// <summary>
+        /// 根据字段列名称获取实体(Service层调用需要赋值DBName)
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="colName"></param>
+        /// <param name="value"></param>
+        /// <param name="DBName"></param>
+        /// <returns></returns>
+        public T GetDefaultByName<T>(string colName, string value, string DBName = "") where T : class
+        {
+            var dataList = GetByName<T>(colName, value, DBName).ToList<T>();
+            if (dataList.Count() > 0)
+                return dataList.FirstOrDefault<T>();
+            else
+                return null;
+        }
+
+        /// <summary>
+        /// 获取表名称
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <returns></returns>
+        public string GetTableName<T>() where T : class
+        {
+            string tableName = string.Empty;
+            System.Attribute[] attr = System.Attribute.GetCustomAttributes(typeof(T));
+            foreach (var item in attr)
+            {
+                if ("System.SerializableAttribute" != (item.TypeId.ToString()))
+                {
+                    tableName = (item as dynamic).TableName;
+                }
+            }
+            return tableName;
+        }
+
+        /// <summary>
+        /// 根据字段列名称获取实体
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="colName"></param>
+        /// <param name="value"></param>
+        /// <returns></returns>
+        public IList<T> GetByName<T>(string colName, string value, string DBName = "") where T : class
+        {
+            var tblName = GetTableName<T>();
+            string sql = "SELECT * FROM "+ tblName + " WHERE "+ colName + "=@Value";
+            try
+            {
+                using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+                {
+                    IList<T> dataList = SqlMapper.Query<T>(conn, sql, new { Value = value }).ToList();
+                    conn.Close();
+                    conn.Dispose();
+                    return dataList;
+                }
+            }
+            catch
+            {
+                throw;
+            }
+        }
+
+        public IList<T> GetByName<T>(string colName, string value1, string colName2, string value2, string DBName = "") where T : class
+        {
+            var tblName = GetTableName<T>();
+            var sql = "SELECT * FROM " + tblName + " WHERE " + colName + "=@Value1 And " + colName2 + "=@Value2";
+            try
+            {
+                using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+                {
+                    IList<T> dataList = SqlMapper.Query<T>(conn, sql, new { Value1 = value1, Value2 = value2 }).ToList();
+                    conn.Close();
+                    conn.Dispose();
+                    return dataList;
+                }
+            }
+            catch
+            {
+                throw;
+            }
+        }
+
+        public IList<T> GetByName<T>(string colName, string value, string colName2, string value2, string colName3, string value3, string DBName = "") where T : class
+        {
+            var tblName = GetTableName<T>();
+
+            var sql = "SELECT * FROM "+ tblName + " WHERE "+ colName + "=@colValue And "+ colName2 + "=@colValue2 And "+ colName3 + "=@colValue3";
+            try
+            {
+                using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+                {
+                    IList<T> dataList = SqlMapper.Query<T>(conn, sql, new { colValue = value, colValue2 = value2, colValue3 = value3 }).ToList();
+                    conn.Close();
+                    conn.Dispose();
+                    return dataList;
+                }
+            }
+            catch
+            {
+                throw;
+            }
+
+        }
+        /// <summary>
+        /// 根据多个Id获取多个实体
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="ids"></param>
+        /// <returns></returns>
+        public IEnumerable<T> GetByIds<T>(IList<dynamic> ids, string DBName = "") where T : class
+        {
+            var tblName = GetTableName<T>();
+            var idsin = string.Join(",", ids.ToArray<dynamic>());
+            var sql = string.Format("SELECT * FROM {0} WHERE Id in (@ids)", tblName);
+
+            IDbConnection conn = BusinessFactory.CreateConnection(DBName);
+            try
+            {
+                IEnumerable<T> dataList = SqlMapper.Query<T>(conn, sql, new { ids = idsin });
+
+                return dataList;
+            }
+            catch
+            {
+                throw;
+            }
+            finally
+            {
+                conn.Close();
+                conn.Dispose();
+            }
+        }
+
+
+        /// <summary>
+        /// 查询匹配的一条数据
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="sql"></param>
+        /// <param name="param"></param>
+        /// <param name="buffered"></param>
+        /// <returns></returns>
+        public T GetFirst<T>(string sql, dynamic param = null, bool buffered = true, string DBName = "") where T : class
+        {
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+                T entity = null;
+                if (param != null && param.GetType().Name == "IDataParameter[]")
+                {
+                    List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                    foreach (var item in param)
+                    {
+                        Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                    }
+                    var list = SqlMapper.Query<T>(conn, sql, Listparama as object, null, buffered).ToList();
+                    if (list != null && list.Count() > 0)
+                    {
+                        entity = list[0];
+                    }
+                    conn.Close();
+                    conn.Dispose();
+                    return entity;
+                }
+                else
+                {
+                    var list = SqlMapper.Query<T>(conn, sql, param as object, null, buffered).ToList();
+                    if (list != null && list.Count() > 0)
+                    {
+                        entity = list[0];
+                    }
+                    conn.Close();
+                    conn.Dispose();
+                    return entity;
+                }
+                
+            }
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="conn"></param>
+        /// <param name="sql"></param>
+        /// <param name="param"></param>
+        /// <param name="buffered"></param>
+        /// <returns></returns>
+        public T GetFirst<T>(IDbConnection conn, string sql, dynamic param = null, IDbTransaction trans = null,
+            bool buffered = true) where T : class
+        {
+            T entity = null;
+            var list = SqlMapper.Query<T>(conn, sql, param as object, trans, buffered).ToList();
+            if (list != null && list.Count() > 0)
+            {
+                entity = list[0];
+            }
+            return entity;
+
+        }
+        public IEnumerable<T> Query<T>(string sql, dynamic param = null, bool buffered = true, string DBName = "") where T : class
+        {
+                IDbConnection conn = BusinessFactory.CreateConnection(DBName);
+         
+                if (param != null && param.GetType().Name == "IDataParameter[]")
+                {
+                    List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                    foreach (var item in param)
+                    {
+                        Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                    }
+                    return SqlMapper.Query<T>(conn, sql, Listparama as object, null, buffered, conn.ConnectionTimeout);
+                }
+                else
+                {
+                    return SqlMapper.Query<T>(conn, sql, param as object, null, buffered, conn.ConnectionTimeout);
+                }
+        }
+        public IEnumerable<T> Query<T>(IDbConnection conn, string sql, dynamic param = null, IDbTransaction trans = null, bool buffered = true) where T : class
+        {
+            return SqlMapper.Query<T>(conn, sql, param as object, trans, buffered);
+        }
+        public IEnumerable<dynamic> Query(IDbConnection conn, string sql, dynamic param = null, IDbTransaction trans = null, bool buffered = true)
+        {
+            return SqlMapper.Query(conn, sql, param as object, trans, buffered);
+        }
+
+        /// <summary>
+        /// 根据表达式来选择
+        /// </summary>
+        /// <typeparam name="TFirst"></typeparam>
+        /// <typeparam name="TSecond"></typeparam>
+        /// <typeparam name="TReturn"></typeparam>
+        /// <param name="sql"></param>
+        /// <param name="map"></param>
+        /// <param name="param"></param>
+        /// <param name="transaction"></param>
+        /// <param name="buffered"></param>
+        /// <param name="splitOn"></param>
+        /// <param name="commandTimeout"></param>
+        /// <returns></returns>
+        public IEnumerable<TReturn> Query<TFirst, TSecond, TReturn>(IDbConnection conn, string sql, Func<TFirst, TSecond, TReturn> map,
+            dynamic param = null, IDbTransaction transaction = null, bool Isbuffered = true,
+            string id = "id", int? commandTimeout = null)
+        {
+            return SqlMapper.Query(conn, sql, map, param as object, transaction, Isbuffered, id);
+        }
+
+        public IEnumerable<T> GetList<T>(IDbConnection conn, IJudge judge = null, IList<ISort> sort = null,
+            bool Isbuffered = false) where T : class
+        {
+            return conn.GetList<T>(judge, sort, null, null, Isbuffered);
+        }
+        public int Execute(string sql, string DBName = "", dynamic param = null, IDbTransaction transaction = null)
+        {
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+                int result = 0;
+                if (param != null && param.GetType().Name == "IDataParameter[]")
+                {
+                    List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                    foreach (var item in param)
+                    {
+                        Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                    }
+                    result = conn.Execute(sql, Listparama as object, transaction);
+                    conn.Close();
+                    conn.Dispose();
+                    return result;
+
+                }
+                else
+                {
+                    result = conn.Execute(sql, param as object, transaction);
+                    conn.Close();
+                    conn.Dispose();
+                    return result;
+                }
+               
+            }
+        }
+        public int ExecuteCommand(IDbCommand cmd)
+        {
+            return cmd.ExecuteNonQuery();
+        }
+
+        public int ExecuteProc(IDbConnection conn, string procName, DynamicParameters param = null)
+        {
+            return conn.Execute(procName, param, null, null, CommandType.StoredProcedure);
+        }
+        public DataTable ExecuteProc(string procName, dynamic parameters = null, string DBName = "")
+        {
+            DataTable table = new DataTable();
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+                if (parameters != null && parameters.GetType().Name == "IDataParameter[]")
+                {
+                    List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                    foreach (var item in parameters)
+                    {
+                        Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                    }
+                    IDataReader reader = SqlMapper.ExecuteReader(conn, procName, Listparama,null,conn.ConnectionTimeout,CommandType.StoredProcedure);
+                    table.Load(reader);
+                    reader.Close();
+
+                }
+                else
+                {
+                    IDataReader reader = SqlMapper.ExecuteReader(conn, procName, parameters, null, conn.ConnectionTimeout, CommandType.StoredProcedure);
+                    table.Load(reader);
+                    reader.Close();
+                }
+                conn.Close();
+                conn.Dispose();
+            }
+            return table;
+        }
+        public IList<T> ExecProcQuery<T>(IDbConnection conn, string procName, DynamicParameters param)
+            where T : class
+        {
+            IList<T> list = conn.Query<T>(procName, param, null, false, null, CommandType.StoredProcedure).ToList<T>();
+            return list;
+        }
+        public object ExecuteScalar(string sql, bool buffered = false, string DBName = "")
+        {
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+                var cmd = conn.CreateCommand();
+                cmd.CommandText = sql;
+                cmd.CommandType = CommandType.Text;
+                return ExecuteScalar(conn, cmd);
+            }
+        }
+        public object ExecuteScalar(string sql, dynamic cmdParms, bool buffered = false, string DBName = "")
+        {
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+                var cmd = conn.CreateCommand();
+                if (cmdParms != null && cmdParms.GetType().Name == "IDataParameter[]")
+                {
+                    foreach (var item in cmdParms)
+                    {
+                        cmd.Parameters.Add(new SqlParameter(item.ParameterName, item.Value));
+                    }
+                }
+                else
+                {
+                    foreach (var item in cmdParms)
+                    {
+                        cmd.Parameters.Add(item);
+                    }
+                }
+                cmd.CommandText = sql;
+                cmd.CommandType = CommandType.Text;
+                return ExecuteScalar(conn, cmd);
+
+            }
+        }
+        public object ExecuteScalar(IDbConnection conn, string sql, bool buffered = false)
+        {
+            var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandType = CommandType.Text;
+
+            return ExecuteScalar(conn, cmd);
+        }
+        public object ExecuteScalar(IDbConnection conn, IDbCommand cmd)
+        {
+            try
+            {
+                bool wasClosed = conn.State == ConnectionState.Closed;
+                if (wasClosed) conn.Open();
+
+                return cmd.ExecuteScalar();
+            }
+            catch (System.Exception)
+            {
+                throw;
+            }
+            finally
+            {
+                conn.Close();
+                conn.Dispose();
+                if (cmd != null)
+                    cmd.Dispose();
+            }
+        }
+        public dynamic Insert<T>(T entity, string DBName = "") where T : class
+        {
+            dynamic newId;
+            var session = BusinessFactory.CreateSession(DBName);
+            session.BeginTrans();
+            try
+            {
+                newId = Insert<T>(session.Connection, entity, session.Transaction);
+                session.Commit();
+            }
+            catch (System.Exception ex)
+            {
+                session.Rollback();
+                throw;
+            }
+            finally
+            {
+                session.Dispose();
+            }
+            return newId;
+        }
+
+        public dynamic Insert<T>(IDbConnection conn, T entity, IDbTransaction transaction = null) where T : class
+        {
+            dynamic result = conn.Insert<T>(entity, transaction);
+            return result;
+        }
+        public bool Update<T>(T entity, string DBName = "") where T : class
+        {
+            var session = BusinessFactory.CreateSession(DBName);
+
+            session.BeginTrans();
+            try
+            {
+                var isOk = Update<T>(session.Connection, entity, session.Transaction);
+                session.Commit();
+
+                return isOk;
+            }
+            catch (System.Exception)
+            {
+                session.Rollback();
+                throw;
+            }
+            finally
+            {
+                session.Connection.Close();
+                session.Connection.Dispose();
+                session.Dispose();
+            }
+        }
+        public bool Update<T>(IDbConnection conn, T entity, IDbTransaction transaction = null) where T : class
+        {
+            bool isOk = conn.Update<T>(entity, transaction);
+
+            return isOk;
+        }
+        public void InsertBatch<T>(IDbConnection conn, IEnumerable<T> entityList, IDbTransaction transaction = null) where T : class
+        {
+            ISql sqlGenerator = new SqlImpl(new DapperConfig());
+            var classMap = sqlGenerator.config.GetMap<T>();
+            var tblName = string.Format("{0}", GetTableName<T>());
+
+            var tran = (SqlTransaction)transaction;
+            using (var bulkCopyCache = new SqlBulkCopy(conn as SqlConnection, SqlBulkCopyOptions.TableLock, tran))
+            {
+                bulkCopyCache.BatchSize = entityList.Count();
+                bulkCopyCache.DestinationTableName = tblName;
+                var TempTable = new DataTable();
+                var props = classMap.Properties.Where(x => x.Ignored == false).ToArray();
+                foreach (var v in props)
+                {
+                    bulkCopyCache.ColumnMappings.Add(v.Name, v.Name);
+                    TempTable.Columns.Add(v.Name,  Nullable.GetUnderlyingType(v.PropertyInfo.PropertyType)  ??  v.PropertyInfo.PropertyType);
+                }
+                var values = new object[props.Count()];
+                foreach (var itemm in entityList)
+                {
+                    for (var i = 0; i < values.Length; i++)
+                    {
+                        values[i] = props[i].PropertyInfo.GetValue(itemm, null);
+                    }
+                    TempTable.Rows.Add(values);
+                }
+                bulkCopyCache.WriteToServer(TempTable);
+            }
+        }
+        public bool UpdateBatch<T>(IDbConnection conn, IEnumerable<T> entityList, IDbTransaction transaction = null) where T : class
+        {
+            bool isOk = false;
+            foreach (var item in entityList)
+            {
+                Update<T>(conn, item, transaction);
+            }
+            isOk = true;
+            return isOk;
+        }
+      
+        public int ExecuteSQL(IDbConnection conn, string strSQL, dynamic cmdParms = null, IDbTransaction transaction = null)
+        {
+             var result = SqlMapper.Execute(conn, strSQL, cmdParms,transaction,conn.ConnectionTimeout,CommandType.Text);
+            return result;
+        }
+        public int ExecuteSqlTranMulti(IDbTransaction transaction, IDbConnection conn, string SQLString, CommandType? commandType = null)
+        {
+            return conn.Execute(SQLString, null, transaction, 60, commandType);
+        }
+        public int ExecuteSqlTranMulti(IDbTransaction transaction, IDbConnection conn, string SQLString, CommandType? commandType = null, params IDataParameter[] cmdParms)
+        {
+            if (cmdParms != null && cmdParms.GetType().Name == "IDataParameter[]")
+            {
+                List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                foreach (var item in cmdParms)
+                {
+                    Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                }
+                return conn.Execute(SQLString, Listparama, transaction, 60, commandType);
+            }
+            else
+            {
+                return conn.Execute(SQLString, cmdParms, transaction, 60, commandType);
+            }
+        }
+
+        public object ExecuteSqlTranMultiScalar(IDbTransaction transaction, IDbConnection conn, string SQLString, CommandType? commandType = null, params IDataParameter[] cmdParms)
+        {
+            if (cmdParms != null && cmdParms.GetType().Name == "IDataParameter[]")
+            {
+                List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                foreach (var item in cmdParms)
+                {
+                    Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                }
+                return conn.ExecuteScalar(SQLString, Listparama, transaction, conn.ConnectionTimeout, commandType);
+            }
+            else
+            {
+                return conn.ExecuteScalar(SQLString, cmdParms, transaction, conn.ConnectionTimeout, commandType);
+            }
+        }
+        /// <summary>
+        /// 事物执行同一库中SQL(单纯conn事务,无数据库池操作)
+        /// </summary>
+        /// <param name="list"></param>
+        /// <param name="DBName"></param>
+        /// <returns></returns>
+        public int ExecuteSqlTran(List<CommandInfo> list, string DBName = "")
+        {
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+                if (conn.State == ConnectionState.Closed)
+                {
+                    conn.Open();
+                }
+                var cmd = conn.CreateCommand();
+                IDbTransaction transaction = conn.BeginTransaction();
+                cmd.Transaction = transaction;
+                try
+                {
+                    foreach (CommandInfo command in list)
+                    {
+                        string cmdText = command.CommandText;
+                        IDataParameter[] cmdParms = (IDataParameter[])command.Parameters;
+
+                        PrepareCommand(cmd, conn, transaction, cmdText, cmdParms);
+                        if (command._tranNext == TranNext.Event)
+                        {
+                            if (command.CommandText.ToLower().IndexOf("count(") == -1)
+                            {
+                                transaction.Rollback();
+                                throw new Exception(command.CommandText + "必须符合select count(..的格式");
+                                //return 0;
+                            }
+
+                            object obj = cmd.ExecuteScalar();
+                            bool isHave = false;
+                            if (obj == null && obj == DBNull.Value)
+                            {
+                                isHave = false;
+                            }
+                            else
+                            {
+                                isHave = Convert.ToInt32(obj) > 0;
+                            }
+                            if (isHave == true)
+                            {
+                                command.OnEvent();
+                            }
+                        }
+                        if (command._tranNext == TranNext.Contine || command._tranNext == TranNext.NoContine)
+                        {
+                            if (command.CommandText.ToLower().IndexOf("count(") == -1)
+                            {
+                                transaction.Rollback();
+                                throw new Exception( command.CommandText + "必须符合select count(..的格式");
+                            }
+
+                            object obj = cmd.ExecuteScalar();
+                            bool isHave = false;
+                            if (obj == null && obj == DBNull.Value)
+                            {
+                                isHave = false;
+                            }
+                            isHave = Convert.ToInt32(obj) > 0;
+
+                            if (command._tranNext == TranNext.Contine && !isHave)
+                            {
+                                transaction.Rollback();
+                                throw new Exception( command.CommandText + "返回值必须大于0");
+                            }
+                            if (command._tranNext == TranNext.NoContine && isHave)
+                            {
+                                transaction.Rollback();
+                                throw new Exception(command.CommandText + "返回值必须等于0");
+                            }
+                            continue;
+                        }
+                        int val = cmd.ExecuteNonQuery();
+                        if (command._tranNext == TranNext.ExcuteRows && val == 0)
+                        {
+                            transaction.Rollback();
+                            throw new Exception(command.CommandText + "必须有影响行");
+                        }
+                        cmd.Parameters.Clear();
+                    }
+                    transaction.Commit();
+                    return 1;
+                }
+                catch (System.Data.SqlClient.SqlException e)
+                {
+                    transaction.Rollback();
+                    throw e;
+                }
+                catch (Exception e)
+                {
+                    transaction.Rollback();
+                    throw e;
+                }
+            }
+        }
+        /// <summary>
+        /// 返回DataTable
+        /// </summary>
+        /// <param name="sql"></param>
+        /// <param name="DBName"></param>
+        /// <param name="cmdParms"></param>
+        /// <returns></returns>
+        public DataTable ExecuteDataTable(string sql, string DBName = "", dynamic cmdParms = null)
+        {
+            DataTable table = new DataTable();
+            
+            
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+                if (cmdParms != null && cmdParms.GetType().Name == "IDataParameter[]")
+                {
+                    List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                    foreach (var item in cmdParms)
+                    {
+                        Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                    }
+                    IDataReader reader = SqlMapper.ExecuteReader(conn, sql, Listparama, null, conn.ConnectionTimeout, null);
+                    table.Load(reader);
+                    reader.Close();
+                }
+                else
+                {
+                    IDataReader reader = SqlMapper.ExecuteReader(conn, sql, cmdParms, null, conn.ConnectionTimeout, null);
+                    table.Load(reader);
+                    reader.Close();
+                }
+                conn.Close();
+            }
+            return table;
+        }
+
+        public DataSet ExecuteDataSet(string sql, string DBName = "", dynamic cmdParms = null)
+        {
+            DataSet ds = new FillDataSet();
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+               
+                if (cmdParms != null && cmdParms.GetType().Name == "IDataParameter[]")
+                {
+                    List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                    foreach (var item in cmdParms)
+                    {
+                        Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                    }
+                   
+                    IDataReader reader = SqlMapper.ExecuteReader(conn, sql, Listparama,null,conn.ConnectionTimeout,null);
+                    ds.Load(reader, LoadOption.OverwriteChanges, null, new DataTable[] { });
+                    reader.Close();
+                }
+                else
+                {
+                    IDataReader reader = SqlMapper.ExecuteReader(conn, sql, cmdParms, null, conn.ConnectionTimeout, null);
+                    ds.Load(reader, LoadOption.OverwriteChanges, null, new DataTable[] { });
+                    reader.Close();
+                }
+                conn.Close();
+            }
+            return ds;
+        }
+
+        public DbProviderFactory DbProviderFactory { get; private set; }
+        public int ScopeExecuteNonQuery(string commandText, dynamic parameters, string DBName)
+        {
+            DbConnection connection = null;
+            this.DbProviderFactory = BusinessFactory.GetFactory(DBName);
+            DbCommand command = this.DbProviderFactory.CreateCommand();
+            DbTransaction dbTransaction = null;
+            try
+            {
+                command.CommandText = commandText;
+                parameters = parameters ?? new Dictionary<string, object>();
+                foreach (var item in parameters)
+                {
+                    command.Parameters.Add(item);
+                }
+                if (null != Transaction.Current)
+                {
+                    command.Connection = Transaction.Current.DbTransactionWrapper.DbTransaction.Connection;
+                    command.Transaction = Transaction.Current.DbTransactionWrapper.DbTransaction;
+                }
+                else
+                {
+                    connection = DbProviderFactory.CreateConnection();
+                    DatabaseSQL db = Persistence.Instance().GetDatabase(DBName);
+
+                    connection.ConnectionString = db.ConnectionString;
+                    command.Connection = connection;
+                    connection.Open();
+                    if (System.Transactions.Transaction.Current == null)
+                    {
+                        dbTransaction = connection.BeginTransaction();
+                        command.Transaction = dbTransaction;
+                    }
+                }
+                int result = command.ExecuteNonQuery();
+                if (null != dbTransaction)
+                {
+                    dbTransaction.Commit();
+                }
+                return result;
+            }
+            catch
+            {
+                if (null != dbTransaction)
+                {
+                    dbTransaction.Rollback();
+                }
+                throw;
+            }
+            finally
+            {
+                if (null != connection)
+                {
+                    connection.Dispose();
+                }
+                if (null != dbTransaction)
+                {
+                    dbTransaction.Dispose();
+                }
+                command.Dispose();
+            }
+        }
+
+        public List<System.Collections.Hashtable> DbReaderToHash(string sql, string DBName = "", dynamic cmdParms = null)
+        {
+            List<Hashtable> list = new List<Hashtable>();
+            using (IDbConnection conn = BusinessFactory.CreateConnection(DBName))
+            {
+                if (cmdParms != null && cmdParms.GetType().Name == "IDataParameter[]")
+                {
+                    List<KeyValuePair<string, object>> Listparama = new List<KeyValuePair<string, object>>();
+                    foreach (var item in cmdParms)
+                    {
+                        Listparama.Add(new KeyValuePair<string, object>(item.ParameterName, item.Value));
+                    }
+                    IDataReader reader = SqlMapper.ExecuteReader(conn, sql, Listparama);
+                    while (reader.Read())
+                    {
+                        var item = new Hashtable();
+
+                        for (var i = 0; i < reader.FieldCount; i++)
+                        {
+                            var name = reader.GetName(i);
+                            var value = reader[i];
+                            item[name] = value;
+                        }
+                        list.Add(item);
+                    }
+                    reader.Close();
+                }
+                else
+                {
+                    IDataReader reader = SqlMapper.ExecuteReader(conn, sql, cmdParms);
+                    while (reader.Read())
+                    {
+                        var item = new Hashtable();
+
+                        for (var i = 0; i < reader.FieldCount; i++)
+                        {
+                            var name = reader.GetName(i);
+                            var value = reader[i];
+                            item[name] = value;
+                        }
+                        list.Add(item);
+                    }
+                    reader.Close();
+                }
+            }
+            return list;
+        }
+
+    }
+}
