@@ -1,0 +1,124 @@
+/*
+ License: http://www.apache.org/licenses/LICENSE-2.0 
+ Home page: Dapper-Extensions-v1.4.tar.gz/Dapper-Extensions-1.4/DapperExtensions/Sql/SqlGenerator.cs
+ */
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using RB.ED.DWI.Business.Mapper;
+
+namespace RB.ED.DWI.Business
+{
+    public interface ISql
+    {
+        IDapperConfig config { get; }
+        
+        string Select(_IClassMapper map, IJudge predicate, IList<ISort> sort, IDictionary<string, object> parameters);
+        string Insert(_IClassMapper map);
+        string Update(_IClassMapper map, IJudge predicate, IDictionary<string, object> parameters);
+        string IdentitySql(_IClassMapper map);
+        string GetTableName(_IClassMapper map);
+        string GetColumnName(_IClassMapper map, IPropertyMapper property, bool includeAlias);
+        string GetColumnName(_IClassMapper map, string propertyName, bool includeAlias);
+        bool SupportsMultipleStatements();
+    }
+
+    public class SqlImpl : ISql
+    {
+        public SqlImpl(IDapperConfig configuration)
+        {
+            config = configuration;
+        }
+        public IDapperConfig config { get; private set; }
+        public virtual string Select(_IClassMapper map, IJudge predicate, IList<ISort> sort, IDictionary<string, object> parameters)
+        {
+            if (parameters == null)
+            {
+                throw new ArgumentNullException("Parameters");
+            }
+            StringBuilder sql = new StringBuilder(string.Format("select {0} from {1}",ReturnSelectCol(map),GetTableName(map)));
+            if (predicate != null)
+            {
+                sql.Append(" where ").Append(predicate.GetSql(this, parameters));
+            }
+            if (sort != null && sort.Any())
+            {
+                sql.Append(" order by ").Append(sort.Select(o => GetColumnName(map, o.Property, false) + (o.Ascending ? " asc" : " desc")).AppendString());
+            }
+
+            return sql.ToString();
+        }
+        public virtual string Insert(_IClassMapper map)
+        {
+            var columns = map.Properties.Where(o => !(o.Ignored || o.IsReadOnly || o.KeyType == KeyType.Identity));
+            if (!columns.Any())
+            {
+                throw new ArgumentException("no columns were mapped.");
+            }
+            var columnNames = columns.Select(p => GetColumnName(map, p, false));
+            var parameters = columns.Select(p => config.Dialect.ParameterPrefix + p.Name);
+            return string.Format("insert into {0} ({1}) values ({2})",GetTableName(map),columnNames.AppendString(),parameters.AppendString());
+        }
+
+        public virtual string Update(_IClassMapper map, IJudge predicate, IDictionary<string, object> parameters)
+        {
+            if (predicate == null)
+            {
+                throw new ArgumentNullException("PredicateNull");
+            }
+            if (parameters == null)
+            {
+                throw new ArgumentNullException("ParametersNull");
+            }
+            var columns = map.Properties.Where(o => !(o.Ignored || o.IsReadOnly || o.KeyType == KeyType.Identity));
+            if (!columns.Any())
+            {
+                throw new ArgumentException("No columns");
+            }
+            var setSql = columns.Select( p => string.Format("{0} = {1}{2}", GetColumnName(map, p, false), config.Dialect.ParameterPrefix, p.Name));
+            return string.Format("update {0} set {1} where {2}", GetTableName(map), setSql.AppendString(), predicate.GetSql(this, parameters));
+        }
+        public virtual string IdentitySql(_IClassMapper map)
+        {
+            return config.Dialect.GetIdentitySql(GetTableName(map));
+        }
+
+        public virtual string GetTableName(_IClassMapper map)
+        {
+            return config.Dialect.GetTableName(map.SchemaName, map.TableName, null);
+        }
+
+        public virtual string GetColumnName(_IClassMapper map, IPropertyMapper property, bool includeAlias)
+        {
+            string alias = null;
+            if (property.ColumnName != property.Name && includeAlias)
+            {
+                alias = property.Name;
+            }
+            return config.Dialect.GetColumnName(GetTableName(map), property.ColumnName, alias);
+        }
+
+        public virtual string GetColumnName(_IClassMapper map, string propertyName, bool includeAlias)
+        {
+            IPropertyMapper propertyMap = map.Properties.SingleOrDefault(o => o.Name.Equals(propertyName, StringComparison.InvariantCultureIgnoreCase));
+            if (propertyMap == null)
+            {
+                throw new ArgumentException(string.Format("not find '{0}' in Mapping!!!", propertyName));
+            }
+
+            return GetColumnName(map, propertyMap, includeAlias);
+        }
+
+        public virtual bool SupportsMultipleStatements()
+        {
+            return config.Dialect.MultipleStatements;
+        }
+
+        public virtual string ReturnSelectCol(_IClassMapper _classMap)
+        {
+            var columns = _classMap.Properties.Where(o => !o.Ignored).Select(o => GetColumnName(_classMap, o, true));
+            return columns.AppendString();
+        }
+    }
+}
